@@ -1,0 +1,6 @@
+build/
+storage/
+__pycache__/
+.DS_Store
+cart_state.json
+*.apk
