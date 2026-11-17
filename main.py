@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 
 GIST_ID = "5503a740bfc7c96e8f76f7e7a3dae417"
-APP_VERSION = 37
+APP_VERSION = 38
 GIST_API_URL = f"https://api.github.com/gists/{GIST_ID}"
 CATALOG_URL = f"https://gist.githubusercontent.com/qwas2008/{GIST_ID}/raw/catalog.json"
 APP_INFO_URL = f"https://gist.githubusercontent.com/qwas2008/{GIST_ID}/raw/app_info.json"
@@ -648,10 +648,10 @@ def main(page: ft.Page):
             delivery_input,
             ft.ElevatedButton("Сохранить", on_click=save_settings_click, width=300),
             ft.Divider(height=10),
-            ft.OutlinedButton("Проверить обновления базы", icon=ft.Icons.CLOUD_SYNC, on_click=manual_sync_click, width=300),
+            ft.OutlinedButton("Обновить прайс", icon=ft.Icons.CLOUD_SYNC, on_click=manual_sync_click, width=300),
             sync_info_text,
             ft.Divider(height=10),
-            ft.OutlinedButton("Проверить обновление приложения", icon=ft.Icons.SYSTEM_UPDATE, on_click=lambda e: check_for_updates(silent=False), width=300),
+            ft.OutlinedButton("Обновить приложение", icon=ft.Icons.SYSTEM_UPDATE, on_click=lambda e: check_for_updates(silent=False), width=300),
             ft.Text(f"Версия приложения: {APP_VERSION}", size=12, color=ft.Colors.GREY_700, text_align=ft.TextAlign.CENTER)
         ], alignment=ft.MainAxisAlignment.START, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
         padding=20,
