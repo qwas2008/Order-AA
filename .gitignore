@@ -4,3 +4,7 @@ __pycache__/
 .DS_Store
 cart_state.json
 *.apk
+
+.gist_token
+catalog.json
+sync_to_gist.py

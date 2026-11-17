@@ -5,9 +5,12 @@ import os
 import hashlib
 import subprocess
 import sys
+import time
 from datetime import datetime
 
-CATALOG_URL = "https://gist.githubusercontent.com/qwas2008/5503a740bfc7c96e8f76f7e7a3dae417/raw/catalog.json"
+GIST_ID = "5503a740bfc7c96e8f76f7e7a3dae417"
+GIST_API_URL = f"https://api.github.com/gists/{GIST_ID}"
+CATALOG_URL = f"https://gist.githubusercontent.com/qwas2008/{GIST_ID}/raw/catalog.json"
 DB_FILE = 'amway_db.json'
 CART_FILE = 'cart_state.json'
 
@@ -124,20 +127,57 @@ def normalize_remote_data(remote_data, existing_db):
     return new_products, new_promos
 
 
+def fetch_latest_catalog_bytes():
+    """
+    Загружает свежий catalog.json сначала через GitHub API (мгновенно, без 5-минутного кэша CDN),
+    а при недоступности API — по прямой ссылке CATALOG_URL.
+    """
+    ts = int(time.time())
+    # 1. Пробуем через GitHub Gist API (отдает обновления без задержки кэша)
+    try:
+        api_req = urllib.request.Request(
+            f"{GIST_API_URL}?t={ts}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "AmwayApp-Client",
+                "Cache-Control": "no-cache"
+            }
+        )
+        with urllib.request.urlopen(api_req, timeout=4) as resp:
+            gist_meta = json.loads(resp.read().decode('utf-8'))
+        files = gist_meta.get("files", {})
+        cat_file = files.get("catalog.json")
+        if cat_file:
+            if not cat_file.get("truncated") and cat_file.get("content"):
+                return cat_file["content"].encode('utf-8')
+            raw_commit_url = cat_file.get("raw_url")
+            if raw_commit_url:
+                raw_req = urllib.request.Request(
+                    raw_commit_url,
+                    headers={"User-Agent": "AmwayApp-Client", "Cache-Control": "no-cache"}
+                )
+                with urllib.request.urlopen(raw_req, timeout=4) as r_resp:
+                    return r_resp.read()
+    except Exception:
+        pass
+
+    # 2. Фолбэк на прямую ссылку
+    req = urllib.request.Request(
+        f"{CATALOG_URL}?t={ts}",
+        headers={"User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache"}
+    )
+    with urllib.request.urlopen(req, timeout=4) as response:
+        return response.read()
+
+
 def sync_db_from_network(db_data):
     """
-    Проверяет наличие нового каталога по ссылке CATALOG_URL.
+    Проверяет наличие нового каталога в Gist.
     Если интернет есть и файл обновился — скачивает и сохраняет в локальный amway_db.json.
     Если интернета нет — тихо возвращает локальную базу без ошибок.
     """
     try:
-        req = urllib.request.Request(
-            CATALOG_URL,
-            headers={"User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache"}
-        )
-        with urllib.request.urlopen(req, timeout=4) as response:
-            raw_bytes = response.read()
-
+        raw_bytes = fetch_latest_catalog_bytes()
         new_hash = hashlib.sha256(raw_bytes).hexdigest()
         remote_json = json.loads(raw_bytes.decode('utf-8'))
         new_products, new_promos = normalize_remote_data(remote_json, db_data)
@@ -468,11 +508,8 @@ def main(page: ft.Page):
                 promo_cards.append(p_card)
                 cards_by_sku.setdefault(p['sku'], []).append(p_card)
 
-        catalog_list.controls.clear()
-        catalog_list.controls.extend(all_cards)
-
-        promo_list.controls.clear()
-        promo_list.controls.extend(promo_cards)
+        catalog_list.controls = list(all_cards)
+        promo_list.controls = list(promo_cards)
 
         if not promo_cards:
             promo_view_container.content = no_promos_placeholder
@@ -527,7 +564,7 @@ def main(page: ft.Page):
                 f"Товаров в базе: {len(db['products'])} | Акций: {len(promo_cards)}\n"
                 f"Обновлено: {db.get('last_sync') or 'только что'}"
             )
-            msg = "База успешно обновлена из сети!" if changed else "У вас уже самая актуальная версия базы."
+            msg = f"База обновлена! Товаров: {len(db['products'])}, акций: {len(promo_cards)}" if changed else f"База актуальна (товаров: {len(db['products'])}, акций: {len(promo_cards)})"
             page.open(ft.SnackBar(ft.Text(msg)))
         else:
             page.open(ft.SnackBar(ft.Text("Нет связи с сервером. Работаем на локальной базе.")))
@@ -699,7 +736,7 @@ def main(page: ft.Page):
 
             marker = "🔥 " if info['is_promo'] else ""
 
-            lines.append(f"{i}. {marker}{p['name']} ({p['vol']})")
+            lines.append(f"{i}. {marker}[{p['sku']}] {p['name']} ({p['vol']})")
             lines.append(f"   {qty} шт. х {info['rub']:,.2f} RUB = {sum_rub:,.2f} RUB")
 
         lines.append(f"\n💰 Итого к оплате: {total_rub:,.2f} RUB ({total_kzt:,.2f} KZT)")
@@ -719,11 +756,6 @@ def main(page: ft.Page):
                 p.communicate(input=text.encode("utf-8"))
             except Exception:
                 pass
-        try:
-            page.open(ft.SnackBar(ft.Text("Заказ скопирован в буфер обмена!"), duration=1500))
-            page.update()
-        except Exception:
-            pass
 
     copy_btn = ft.ElevatedButton("Копировать", icon=ft.Icons.CONTENT_COPY, on_click=copy_receipt, style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE))
     clear_btn = ft.OutlinedButton("Очистить", icon=ft.Icons.DELETE_OUTLINE, icon_color=ft.Colors.RED_500, style=ft.ButtonStyle(color=ft.Colors.RED_500), on_click=clear_cart_click)
