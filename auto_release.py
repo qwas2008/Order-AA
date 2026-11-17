@@ -3,11 +3,13 @@
 """
 Автоматический выпуск обновления (релиза) для Заказ АА+:
 1. Проверяет наличие токена GitHub.
-2. Фиксирует изменения в git и пушит в main.
-3. Определяет следующий номер релиза/сборки (например, 35).
-4. Собирает оптимизированный Android APK (arm64-v8a).
+2. Автоматически увеличивает APP_VERSION в main.py на 1.
+3. Фиксирует изменения в git и отправляет коммит в ветку main.
+4. Собирает оптимизированный Android APK (arm64-v8a, --build-number).
 5. Создает новый GitHub Release в репозитории qwas2008/Order-AA.
 6. Загружает собранный APK как Zakaz_AA.apk к релизу.
+7. Обновляет файл app_info.json в GitHub Gist (5503a740bfc7c96e8f76f7e7a3dae417)
+   со свежей версией, прямой ссылкой apk_url и описанием changes.
 """
 
 import json
@@ -20,6 +22,7 @@ import urllib.request
 from datetime import datetime
 
 REPO = "qwas2008/Order-AA"
+GIST_ID = "5503a740bfc7c96e8f76f7e7a3dae417"
 TOKEN_FILE = ".gist_token"
 FLET_BIN = "/Library/Frameworks/Python.framework/Versions/3.13/bin/flet"
 APK_PATH = "build/apk/app-release.apk"
@@ -56,10 +59,41 @@ def get_headers(token, content_type="application/json"):
     }
 
 
+def get_current_app_version(script_dir):
+    main_path = os.path.join(script_dir, "main.py")
+    if os.path.exists(main_path):
+        with open(main_path, "r", encoding="utf-8") as f:
+            match = re.search(r"APP_VERSION\s*=\s*(\d+)", f.read())
+            if match:
+                return int(match.group(1))
+    return 36
+
+
+def update_main_app_version(new_version, script_dir):
+    main_path = os.path.join(script_dir, "main.py")
+    with open(main_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    new_content, count = re.subn(
+        r"APP_VERSION\s*=\s*\d+",
+        f"APP_VERSION = {new_version}",
+        content
+    )
+    if count == 0:
+        # Если переменной не было, добавим её в начало
+        new_content = f"APP_VERSION = {new_version}\n" + content
+
+    with open(main_path, "w", encoding="utf-8") as f:
+        f.write(new_content)
+
+    log(f"✅ В main.py обновлена переменная: APP_VERSION = {new_version}")
+
+
 def find_next_tag(token, repo):
+    tags = []
+    # 1. Проверяем релизы
     url = f"https://api.github.com/repos/{repo}/releases?per_page=50"
     req = urllib.request.Request(url, headers=get_headers(token))
-    tags = []
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -70,7 +104,7 @@ def find_next_tag(token, repo):
     except Exception as e:
         log(f"⚠️ Не удалось получить список релизов: {e}")
 
-    # Также проверим git tags через API
+    # 2. Проверяем теги Git
     url_tags = f"https://api.github.com/repos/{repo}/tags?per_page=50"
     req_tags = urllib.request.Request(url_tags, headers=get_headers(token))
     try:
@@ -85,7 +119,7 @@ def find_next_tag(token, repo):
 
     if tags:
         return max(tags) + 1
-    return 35
+    return 37
 
 
 def git_commit_and_push(token, repo, tag_num):
@@ -145,7 +179,7 @@ def build_apk(tag_num):
     log(f"✅ APK успешно собран: {APK_PATH} ({size_mb:.1f} MB)")
 
 
-def create_release(token, repo, tag_num):
+def create_release(token, repo, tag_num, changes):
     log(f"🚀 Создание GitHub Release с тегом '{tag_num}'...")
     url = f"https://api.github.com/repos/{repo}/releases"
     payload = {
@@ -155,6 +189,7 @@ def create_release(token, repo, tag_num):
         "body": f"Автоматический релиз Заказ АА+ (сборка {tag_num})\n\n"
                 f"- Дата: {datetime.now().strftime('%d.%m.%Y %H:%M')}\n"
                 f"- Архитектура: arm64-v8a\n"
+                f"- Изменения: {changes}\n"
                 f"- APK: Zakaz_AA.apk",
         "draft": False,
         "prerelease": False
@@ -212,6 +247,44 @@ def upload_asset(token, upload_url_template, apk_file):
         sys.exit(1)
 
 
+def update_gist_app_info(token, version, apk_url, changes):
+    log(f"📝 Обновляем app_info.json в GitHub Gist ({GIST_ID})...")
+    url = f"https://api.github.com/gists/{GIST_ID}"
+    app_info = {
+        "version": int(version),
+        "apk_url": apk_url,
+        "changes": changes,
+        "updated_at": datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+
+    payload = {
+        "files": {
+            "app_info.json": {
+                "content": json.dumps(app_info, ensure_ascii=False, indent=2)
+            }
+        }
+    }
+
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        method="PATCH",
+        headers=get_headers(token)
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            if resp.status in (200, 201):
+                log(f"🎉 Файл app_info.json в Gist успешно обновлён (v{version})!")
+                return True
+    except urllib.error.HTTPError as e:
+        err_msg = e.read().decode("utf-8")
+        log(f"❌ Ошибка обновления app_info.json в Gist (HTTP {e.code}): {err_msg}")
+    except Exception as ex:
+        log(f"❌ Ошибка при запросе к Gist API: {ex}")
+    return False
+
+
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     token = get_token(script_dir)
@@ -219,25 +292,43 @@ def main():
         log("❌ GitHub токен не найден в переменных окружения или в .gist_token")
         sys.exit(1)
 
+    current_main_ver = get_current_app_version(script_dir)
+
     if len(sys.argv) > 1 and sys.argv[1].isdigit():
         tag_num = int(sys.argv[1])
         log(f"Используем указанный номер релиза: {tag_num}")
     else:
-        tag_num = find_next_tag(token, REPO)
-        log(f"Определён следующий номер релиза: {tag_num}")
+        next_remote_tag = find_next_tag(token, REPO)
+        tag_num = max(next_remote_tag, current_main_ver + 1)
+        log(f"Определён следующий номер релиза: {tag_num} (текущий в main.py: {current_main_ver})")
 
-    # 1. Фиксируем и пушим код
+    # 1. Автоматически увеличиваем APP_VERSION в main.py
+    update_main_app_version(tag_num, script_dir)
+
+    # Описание изменений
+    default_changes = (
+        f"Обновление Заказ АА+ (сборка {tag_num}):\n"
+        f"- Актуальный каталог товаров и цен\n"
+        f"- Новые и продленные акции\n"
+        f"- Архитектура: arm64-v8a"
+    )
+    changes = os.environ.get("RELEASE_CHANGES") or default_changes
+
+    # 2. Фиксируем и пушим код
     git_commit_and_push(token, REPO, tag_num)
 
-    # 2. Собираем APK
+    # 3. Собираем APK
     build_apk(tag_num)
 
-    # 3. Создаём релиз
-    release_data = create_release(token, REPO, tag_num)
+    # 4. Создаём релиз
+    release_data = create_release(token, REPO, tag_num, changes)
 
-    # 4. Загружаем Zakaz_AA.apk
+    # 5. Загружаем Zakaz_AA.apk
     upload_url = release_data.get("upload_url")
     download_url = upload_asset(token, upload_url, APK_PATH)
+
+    # 6. Обновляем app_info.json в Gist
+    update_gist_app_info(token, tag_num, download_url, changes)
 
     log("=" * 50)
     log(f"🎉 Выпуск обновления завершён успешно!")
@@ -245,6 +336,7 @@ def main():
     log(f"🌐 Релиз: {release_data.get('html_url')}")
     log(f"📥 Скачать APK: {download_url}")
     log(f"⭐ Постоянная ссылка (latest): https://github.com/{REPO}/releases/latest/download/{ASSET_NAME}")
+    log(f"ℹ️ app_info.json в Gist обновлён до v{tag_num}")
     log("=" * 50)
 
 

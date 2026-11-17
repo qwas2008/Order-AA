@@ -9,8 +9,10 @@ import time
 from datetime import datetime
 
 GIST_ID = "5503a740bfc7c96e8f76f7e7a3dae417"
+APP_VERSION = 37
 GIST_API_URL = f"https://api.github.com/gists/{GIST_ID}"
 CATALOG_URL = f"https://gist.githubusercontent.com/qwas2008/{GIST_ID}/raw/catalog.json"
+APP_INFO_URL = f"https://gist.githubusercontent.com/qwas2008/{GIST_ID}/raw/app_info.json"
 DB_FILE = 'amway_db.json'
 CART_FILE = 'cart_state.json'
 
@@ -570,6 +572,75 @@ def main(page: ft.Page):
             page.open(ft.SnackBar(ft.Text("Нет связи с сервером. Работаем на локальной базе.")))
         page.update()
 
+    def check_for_updates(silent=False):
+        def _fetch():
+            try:
+                ts = int(time.time())
+                url = f"{APP_INFO_URL}?t={ts}"
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0", "Cache-Control": "no-cache"}
+                )
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    raw_data = response.read().decode('utf-8')
+                data = json.loads(raw_data)
+
+                remote_version = int(data.get("version", 0))
+                apk_url = str(data.get("apk_url", "")).strip()
+                changes = str(data.get("changes", "Доступна новая версия приложения.")).strip()
+
+                if remote_version > APP_VERSION:
+                    def download_click(e):
+                        try:
+                            page.close(dlg)
+                        except Exception:
+                            pass
+                        if apk_url:
+                            page.launch_url(apk_url)
+
+                    def close_click(e):
+                        try:
+                            page.close(dlg)
+                        except Exception:
+                            pass
+
+                    dlg = ft.AlertDialog(
+                        title=ft.Text("Доступно обновление!", weight=ft.FontWeight.BOLD),
+                        content=ft.Column([
+                            ft.Text(f"Новая версия: {remote_version} (текущая: {APP_VERSION})", weight=ft.FontWeight.W_500),
+                            ft.Divider(height=10),
+                            ft.Text(changes, size=13),
+                        ], tight=True, spacing=6),
+                        actions=[
+                            ft.TextButton("Позже", on_click=close_click),
+                            ft.ElevatedButton(
+                                "Скачать",
+                                icon=ft.Icons.DOWNLOAD,
+                                on_click=download_click,
+                                style=ft.ButtonStyle(bgcolor=ft.Colors.BLUE_700, color=ft.Colors.WHITE)
+                            ),
+                        ],
+                        actions_alignment=ft.MainAxisAlignment.END,
+                    )
+
+                    try:
+                        page.open(dlg)
+                    except Exception:
+                        page.dialog = dlg
+                        dlg.open = True
+                        page.update()
+                else:
+                    if not silent:
+                        page.open(ft.SnackBar(ft.Text(f"У вас установлена последняя версия (v{APP_VERSION})!")))
+                        page.update()
+            except Exception:
+                if not silent:
+                    page.open(ft.SnackBar(ft.Text("Не удалось проверить обновление приложения.")))
+                    page.update()
+
+        import threading
+        threading.Thread(target=_fetch, daemon=True).start()
+
     settings_view = ft.Container(
         content=ft.Column([
             ft.Text("Настройки расчета", size=24, weight=ft.FontWeight.BOLD),
@@ -578,7 +649,10 @@ def main(page: ft.Page):
             ft.ElevatedButton("Сохранить", on_click=save_settings_click, width=300),
             ft.Divider(height=10),
             ft.OutlinedButton("Проверить обновления базы", icon=ft.Icons.CLOUD_SYNC, on_click=manual_sync_click, width=300),
-            sync_info_text
+            sync_info_text,
+            ft.Divider(height=10),
+            ft.OutlinedButton("Проверить обновление приложения", icon=ft.Icons.SYSTEM_UPDATE, on_click=lambda e: check_for_updates(silent=False), width=300),
+            ft.Text(f"Версия приложения: {APP_VERSION}", size=12, color=ft.Colors.GREY_700, text_align=ft.TextAlign.CENTER)
         ], alignment=ft.MainAxisAlignment.START, horizontal_alignment=ft.CrossAxisAlignment.CENTER, spacing=20),
         padding=20,
         visible=False
@@ -813,6 +887,8 @@ def main(page: ft.Page):
             expand=True
         )
     )
+
+    check_for_updates(silent=True)
 
 
 ft.app(target=main)
